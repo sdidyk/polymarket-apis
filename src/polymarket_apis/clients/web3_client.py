@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from json import dumps, load
 from pathlib import Path
 from typing import Literal
+import time
 
 import httpx
 from eth_account.messages import encode_defunct
@@ -679,7 +680,6 @@ class PolymarketGaslessWeb3Client(BaseWeb3Client):
         self.relay_url = "https://relayer-v2.polymarket.com"
         self.sign_url = "https://builder-signing-server.vercel.app/sign"
         self.relay_hub = "0xD216153c06E857cD7f72665E0aF1d7D82172F494"
-        self.relay_address = "0x7db63fe6d62eb73fb01f8009416f4c2bb4fbda6a"
         self.builder_creds = builder_creds if builder_creds else None
 
     def _execute(
@@ -732,6 +732,8 @@ class PolymarketGaslessWeb3Client(BaseWeb3Client):
         )
         print(f"Transaction ID: {gasless_response.get('transactionID', 'N/A')}")
         print(f"State: {gasless_response.get('state', 'N/A')}")
+        print("⚠️ pause")
+        time.sleep(10)
 
         # Wait for confirmation and return receipt
         tx_hash = gasless_response.get("transactionHash")
@@ -760,11 +762,22 @@ class PolymarketGaslessWeb3Client(BaseWeb3Client):
         response.raise_for_status()
         return int(response.json()["nonce"])
 
+    def _get_relay_payload(self, wallet_type: Literal["PROXY", "SAFE"]) -> dict:
+        """Get payload from relay for Safe wallet."""
+        url = f"{self.relay_url}/relay-payload"
+        params = {
+            "address": self.get_base_address(),
+            "type": wallet_type,
+        }
+        response = self.client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+
     def _build_proxy_relay_transaction(
         self, to: ChecksumAddress, data: str, metadata: str
     ) -> dict:
         """Build Proxy relay transaction body."""
-        proxy_nonce = self._get_relay_nonce(wallet_type="PROXY")
+        relay_payload = self._get_relay_payload(wallet_type="PROXY")
         gas_price = "0"
         relayer_fee = "0"
 
@@ -798,9 +811,9 @@ class PolymarketGaslessWeb3Client(BaseWeb3Client):
             tx_fee=relayer_fee,
             gas_price=gas_price,
             gas_limit=gas_limit,
-            nonce=str(proxy_nonce),
+            nonce=relay_payload["nonce"],
             relay_hub_address=self.relay_hub,
-            relay_address=self.relay_address,
+            relay_address=relay_payload["address"],
         )
 
         struct_hash = "0x" + self.w3.keccak(struct).hex()
@@ -813,7 +826,7 @@ class PolymarketGaslessWeb3Client(BaseWeb3Client):
             "data": encoded_txn,
             "from": self.get_base_address(),
             "metadata": metadata,
-            "nonce": str(proxy_nonce),
+            "nonce": relay_payload["nonce"],
             "proxyWallet": self.get_poly_proxy_address(),
             "signature": "0x" + signature,
             "signatureParams": {
@@ -821,7 +834,7 @@ class PolymarketGaslessWeb3Client(BaseWeb3Client):
                 "gasLimit": gas_limit,
                 "relayerFee": relayer_fee,
                 "relayHub": self.relay_hub,
-                "relay": self.relay_address,
+                "relay": relay_payload["address"],
             },
             "to": self.proxy_factory_address,
             "type": "PROXY",
